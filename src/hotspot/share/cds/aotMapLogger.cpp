@@ -122,45 +122,35 @@ void AOTMapLogger::dumptime_log(ArchiveBuilder* builder, FileMapInfo* mapinfo,
 
 void AOTMapLogger::log_embedded_stubs(const AOTCodeCache* cache, const AOTCodeEntry* entry) {
 
-  //start at the beginning of our AOT cache
-  const char* buf = cache->store_buffer();
+  BlobId blob_id = (BlobId) entry->id();
+  AOTStubData stub_data(blob_id);
 
-  // jump to the embedded stubs section
-  uint pos = entry->offset() + entry->embedded_stub_offset();
+  //This is the first stub_id embedded
+  StubId stub_id = StubInfo::stub_base(blob_id);
+  // This is the total count of stubs embedded
+  int stub_cnt = StubInfo::stub_count(blob_id);
 
-  // Now we can get the information we want to log (embedded stubs)
-  // get the first embedded stub id
-  StubId stub_id = *(StubId*)(buf + pos);
-  pos += sizeof(StubId);
+  log_debug(aot, map)("Stub count: %d", stub_cnt);
 
-  // Embedded StubGenBlobs are assumed to have the following structure
-  // [ StubId | offset | size | N | offset_1 | offset_2 | ... | offset_N ]
-
-  // loop until we run out of stubs (no stubid)
-  while (stub_id != StubId::NO_STUBID) {
+  for (int i = 0; i < stub_cnt; i++) {
     assert(stub_id > StubId::NO_STUBID && stub_id < StubId::NUM_STUBIDS, "Embedded Stub ID is not valid.");
     assert(StubInfo::blob(stub_id) == (BlobId) entry->id(), "We found an embedded stub that doesn't belong here.");
-    uint offset = *(uint*)(buf + pos);
-    pos += sizeof(uint);
-    uint size = *(uint*)(buf + pos);
-    pos += sizeof(uint);
 
-    // Log the embedded stub
-    log_debug(aot, map)(PTR_FORMAT ": @@ %-17s %d id=%d blob=%d %s",
-      p2i(buf + entry->offset() + entry->code_offset() + offset),
-      "EmbeddedStub", size, (int) stub_id, entry->id(), StubInfo::name(stub_id));
+    address end = nullptr;
+    //Load the data of the embedded stub and get start and end pointers
+    address start = stub_data.load_archive_data(stub_id, end);
 
-    //Get the number of secondary/extra entry offsets
-    int n = *(int*) (buf + pos);
-    pos += sizeof(int);
-    //to skip them and prepare for the following stub (if exists)
-    pos += n * sizeof(uint);
-    // the entry+extras count for the stub read from the file should exceed the declared entry count
-    assert(n >= StubInfo::entry_count(stub_id) - 1, "We are missing entries on this stub.");
+    // Some stubs are not generated depending on the environment
+    // This is normal, if nullptr is null we just ignore this one
+    if (start != nullptr) {
+      // Log the embedded stub
+      log_debug(aot, map)(PTR_FORMAT ": @@ %-17s %d id=%d blob=%d %s",
+        p2i(start), "EmbeddedStub", (uint)(end - start), (int) stub_id,
+        entry->id(), StubInfo::name(stub_id));
+    }
 
-    // position ourselves in the potential following stub
-    stub_id = *(StubId*)(buf + pos);
-    pos += sizeof(StubId);
+    //Prepare for the following stub
+    stub_id = StubInfo::next_in_blob(blob_id, stub_id);
   }
 }
 
